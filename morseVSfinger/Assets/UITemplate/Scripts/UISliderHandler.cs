@@ -1,80 +1,88 @@
 ﻿using UnityEngine;
 using UnityEngine.UI;
 
-/// Attach to the BLUE fill image (child of the rounded black box).
 public class UISliderHandler : MonoBehaviour
 {
     [Header("Wires")]
-    [SerializeField] Image image;                        // the blue fill image
-    [SerializeField] RhythmControllerV1 morseController; // provides IsInputHeld, HeldValue [0..1]
+    [SerializeField] private Image leftImage;            // left half (anchors 0..0.5)
+    [SerializeField] private Image rightImage;           // right half (anchors 0.5..1)
+    [SerializeField] private RhythmControllerV1 morseController;
 
     [Header("Visuals")]
-    [SerializeField] bool useCurve = false;           // <-- new toggle
-    [SerializeField] AnimationCurve sampleCurve = null;
-    [SerializeField] Color dotColor = new(0.20f, 0.55f, 1f);
-    [SerializeField] Color dashColor = new(0.15f, 0.35f, 1f);
-    [SerializeField] RectTransform dotTick;
-
+    [SerializeField] private bool useCurve = false;
+    [SerializeField] private AnimationCurve sampleCurve;
+    [SerializeField] private Color dotColor = new(0.20f, 0.55f, 1f);
+    [SerializeField] private Color dashColor = new(0.15f, 0.35f, 1f);
+    [SerializeField] private RectTransform dotTick;
 
     [Header("Behaviour")]
-    [Range(0f, 1f)] [SerializeField] float startFillValue = 0f;  // keep 0 for true-from-zero
-    [SerializeField] float growSpeed = 10f;                    // while holding
-    [SerializeField] float releaseSpeed = 6f;                     // after release
-    [SerializeField] bool autoConfigureImage = true;
+    [SerializeField] private float releaseSpeed = 6f;   // shrink speed when released
 
+    // Tick fixed in the middle (50%)
+    private const float kFixedDotPos = 0.5f;
 
-    // Force the tick to the middle (50%)
-    const float kFixedDotPos = 0.5f;
+    private float current;   // 0..1
 
-    float current;   // smoothed fill [0..1]
-
-    void Reset() { image = GetComponent<Image>(); }
-    void OnValidate() { EnsureImageSetup(); }
-    void Awake() { EnsureImageSetup(); }
-
-    void OnEnable()
+    private void Awake()
     {
-        current = 0f;
-        if (image) image.fillAmount = 0f;
+        ConfigureImage(leftImage, isLeft: true);
+        ConfigureImage(rightImage, isLeft: false);
         PositionDotTickAtMiddle();
     }
 
-    void Update()
+    private void OnEnable()
     {
-        if (!image || !morseController) return;
+        current = 0f;
+        if (leftImage) leftImage.fillAmount = 0f;
+        if (rightImage) rightImage.fillAmount = 0f;
+    }
 
-        // Target: 0..1 (0.5 ~ dot, 1.0 ~ dash)
+    private void Update()
+    {
+        if (!morseController) return;
+
+        // 0..1 based on hold time / dashSeconds
         float target = morseController.IsInputHeld ? morseController.HeldValue : 0f;
 
-        // SNAP while the user is holding (no growth smoothing),
-        // only smooth on release so it feels responsive for short taps.
+        // Snap while holding, smooth only on release
         if (morseController.IsInputHeld)
             current = target;
         else
             current = Mathf.MoveTowards(current, 0f, releaseSpeed * Time.deltaTime);
 
-        // Optional easing (disable with useCurve=false)
         float eased = (useCurve && sampleCurve != null) ? sampleCurve.Evaluate(current) : current;
+        eased = Mathf.Clamp01(eased);
 
-        image.fillAmount = Mathf.Clamp01(startFillValue + eased);
-        image.color = Color.Lerp(dotColor, dashColor, eased);
+        // Same fill amount on both halves → grows from center outward
+        if (leftImage) leftImage.fillAmount = eased;
+        if (rightImage) rightImage.fillAmount = eased;
+
+        // Optional color gradient (dot → dash)
+        Color c = Color.Lerp(dotColor, dashColor, eased);
+        if (leftImage) leftImage.color = c;
+        if (rightImage) rightImage.color = c;
     }
 
-
-    void EnsureImageSetup()
+    private void ConfigureImage(Image img, bool isLeft)
     {
-        if (!image || !autoConfigureImage) return;
-        image.type = Image.Type.Filled;
-        image.fillMethod = Image.FillMethod.Horizontal;
-        image.fillOrigin = (int)Image.OriginHorizontal.Left; // Left → Right
-        image.fillAmount = 0f;
+        if (!img) return;
+
+        img.type = Image.Type.Filled;
+        img.fillMethod = Image.FillMethod.Horizontal;
+
+        // Left half should fill from the center towards the LEFT → origin = Right
+        // Right half should fill from the center towards the RIGHT → origin = Left
+        img.fillOrigin = isLeft
+            ? (int)Image.OriginHorizontal.Right   // center → left
+            : (int)Image.OriginHorizontal.Left;   // center → right;
+
+        img.fillAmount = 0f;
     }
 
-    void PositionDotTickAtMiddle()
+    private void PositionDotTickAtMiddle()
     {
         if (!dotTick) return;
 
-        // Expect dotTick to be a child of the bar. We place it via anchors at 50%.
         var min = dotTick.anchorMin; min.x = kFixedDotPos; dotTick.anchorMin = min;
         var max = dotTick.anchorMax; max.x = kFixedDotPos; dotTick.anchorMax = max;
     }

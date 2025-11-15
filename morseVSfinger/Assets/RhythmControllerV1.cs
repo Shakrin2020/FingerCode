@@ -68,11 +68,11 @@ public class RhythmControllerV1 : MonoBehaviour
     [SerializeField] float dotSeconds = 0.30f;
     [SerializeField] float dashSeconds = 0.80f;
 
-    // >>> NEW: block inputs while pattern is playing
     [Header("Input Gating")]
     [SerializeField] bool blockInputWhilePlaying = true;
 
-    public bool IsInputHeld => capturing && !playing && pressStartTime > 0f;        // >>> changed
+    // ---- Properties used by UISliderHandler ----
+    public bool IsInputHeld => capturing && !playing && pressStartTime > 0f;
     public float HeldSeconds => IsInputHeld ? (Time.time - pressStartTime) : 0f;
     public float HeldValue => Mathf.Clamp01(HeldSeconds / Mathf.Max(0.0001f, dashSeconds));
     public float DotThresholdNorm => Mathf.Clamp01(dotSeconds / Mathf.Max(0.0001f, dashSeconds));
@@ -87,12 +87,14 @@ public class RhythmControllerV1 : MonoBehaviour
     private int accentIndex = -1;
     private bool _inPhaseTransition = false;
 
-    // >>> NEW: remember if ANY segment mismatched in the current attempt
+    // remember if ANY segment mismatched in the current attempt
     private bool hadAnyMismatchThisAttempt = false;
 
     // Tracked coroutines
     private Coroutine _playbackCo;
     private Coroutine _phaseTickCo;
+
+    // ========= Unity lifecycle =========
 
     void Awake()
     {
@@ -102,6 +104,7 @@ public class RhythmControllerV1 : MonoBehaviour
             inputDigit.action.canceled += OnRelease;
         }
     }
+
     void OnDestroy()
     {
         if (inputDigit != null)
@@ -122,6 +125,7 @@ public class RhythmControllerV1 : MonoBehaviour
         if (inputDigit != null) inputDigit.action.Disable();
         capturing = false;
         playing = false;
+        pressStartTime = -1f;
         StopAndSilence(StopReason.OnDisable);
     }
 
@@ -133,23 +137,40 @@ public class RhythmControllerV1 : MonoBehaviour
         if (lastTap > 0 && Time.time - lastTap >= captureIdleGap)
         {
             capturing = false;
-            Evaluate();                 // will defer fail/success handling now
+            Evaluate();
         }
 
-        // editor mouse fallback (optional)
-        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
-            RegisterTap(Time.time);
+#if UNITY_EDITOR || UNITY_STANDALONE
+        // Editor / Standalone mouse fallback: click ANYWHERE in Game view
+        if (Mouse.current != null)
+        {
+            if (Mouse.current.leftButton.wasPressedThisFrame)
+                BeginHold();
+
+            if (Mouse.current.leftButton.wasReleasedThisFrame)
+                EndHold();
+        }
+#endif
     }
 
-    char Classify(float v) => (v < shortLongCut) ? 'S' : 'L';
+    char Classify(float v)
+    {
+        // Compare this hold to the ideal dot and dash durations.
+        float diffDot = Mathf.Abs(v - dotSeconds);
+        float diffDash = Mathf.Abs(v - dashSeconds);
 
-    // ===== flow =====
+        // If it's closer to dotSeconds → 'S', otherwise 'L'
+        return (diffDot <= diffDash) ? 'S' : 'L';
+    }
+
+
+    // ========= FLOW / PUBLIC ENTRY POINTS =========
 
     IEnumerator BeginOtp()
     {
         GeneratePatternFromTotp();
         StopPlayback();
-        // >>> Don't capture until after playback finishes
+        // play pattern then capture
         yield return StartCoroutine(PlayOnce());
         StartCapture();
     }
@@ -159,19 +180,21 @@ public class RhythmControllerV1 : MonoBehaviour
         userIntervals.Clear();
         lastTap = -1f;
         capturing = true;
+        pressStartTime = -1f;
     }
 
+    // Call from UI to restart from first phase
     public void StartFromPhase0()
     {
         StopAndSilence();
         authenticated = false;
         attemptCounter++;
-        hadAnyMismatchThisAttempt = false;      // >>> reset
+        hadAnyMismatchThisAttempt = false;
         currentSegment = 0;
         StartCoroutine(StartSegment(currentSegment));
     }
 
-    // ===== generation & playback =====
+    // ========= GENERATION & PLAYBACK =========
 
     void BuildTargetsIfNeeded()
     {
@@ -215,7 +238,7 @@ public class RhythmControllerV1 : MonoBehaviour
 
         requiredIntervals = useHoldDurationMode ? target.Count : target.Count - 1;
 
-        OnSegmentStart?.Invoke(currentSegment);         // UI updates immediately
+        OnSegmentStart?.Invoke(currentSegment);
         accentIndex = Mathf.Clamp(accentIndex, 0, target.Count - 1);
     }
 
@@ -238,7 +261,7 @@ public class RhythmControllerV1 : MonoBehaviour
         _playbackCo = null;
     }
 
-    // Start button moves to phases UI and kicks off Phase 0, but input is gated until vibration ends
+    // Start button moves to phases UI and kicks off Phase 0
     public void StartOtp()
     {
         StopPhaseTick();
@@ -246,10 +269,11 @@ public class RhythmControllerV1 : MonoBehaviour
 
         capturing = false;
         playing = false;
+        pressStartTime = -1f;
 
         authenticated = false;
         attemptCounter++;
-        hadAnyMismatchThisAttempt = false;      // >>> reset attempt flag
+        hadAnyMismatchThisAttempt = false;
 
         if (currentSegment >= totalSegments) currentSegment = 0;
         StartCoroutine(StartSegment(currentSegment));
@@ -289,7 +313,6 @@ public class RhythmControllerV1 : MonoBehaviour
         Debug.Log($"[Rhythm] >>> OnSegmentStart seg={seg} (Phase {seg + 1})");
         OnSegmentStart?.Invoke(seg);
 
-        // >>> Play first, then allow capture
         capturing = false;
         yield return StartCoroutine(PlayOnce());
         StartCapture();
@@ -304,7 +327,7 @@ public class RhythmControllerV1 : MonoBehaviour
     private void RegisterTapOnset(float now)
     {
         if (!capturing) return;
-        if (blockInputWhilePlaying && playing) return;  // >>> gate input during playback
+        if (blockInputWhilePlaying && playing) return;
 
         if (lastTap > 0f)
         {
@@ -312,7 +335,7 @@ public class RhythmControllerV1 : MonoBehaviour
             if (userIntervals.Count >= requiredIntervals)
             {
                 capturing = false;
-                Evaluate();   // >>> now just records pass/fail and advances
+                Evaluate();
                 return;
             }
         }
@@ -320,39 +343,68 @@ public class RhythmControllerV1 : MonoBehaviour
         SafePulse(0.04f, 0.4f); // tiny ack tick
     }
 
-    // ===== input =====
+    // ========= INPUT HANDLING =========
 
-    private void OnPress(InputAction.CallbackContext ctx)
+    // Core hold logic used by both InputAction + mouse
+    private void BeginHold()
     {
         if (!capturing) return;
-        if (blockInputWhilePlaying && playing) return;  // >>> gate input during playback
+        if (blockInputWhilePlaying && playing) return;
 
         pressStartTime = Time.time;
         SafePulse(0.04f, 0.4f); // tiny ack tick
 
         if (!useHoldDurationMode)
+        {
+            // tap-based mode: record onset immediately
             RegisterTapOnset(pressStartTime);
+        }
+    }
+
+    private void EndHold()
+    {
+        if (!capturing || pressStartTime < 0f) return;
+        if (blockInputWhilePlaying && playing) return;
+
+        if (useHoldDurationMode)
+        {
+            // How long this press actually lasted
+            float rawHold = Time.time - pressStartTime;
+
+            // Log it so you can see your dot/dash timing
+            Debug.Log(
+                $"[Rhythm] Hold seg={currentSegment} index={userIntervals.Count} " +
+                $"raw={rawHold:F3}s  (dotSeconds={dotSeconds:F3}, dashSeconds={dashSeconds:F3})"
+            );
+
+            // Keep behaviour the same as before (just clamp extremes)
+            float hold = Mathf.Clamp(rawHold, 0.05f, 1.50f);
+            userIntervals.Add(hold);
+
+            if (userIntervals.Count >= requiredIntervals)
+            {
+                capturing = false;
+                Evaluate();
+            }
+        }
+
+        pressStartTime = -1f;
+    }
+
+
+
+    // called by Input System (controller trigger etc.)
+    private void OnPress(InputAction.CallbackContext ctx)
+    {
+        BeginHold();
     }
 
     private void OnRelease(InputAction.CallbackContext ctx)
     {
-        if (!capturing || pressStartTime < 0f) return;
-        if (blockInputWhilePlaying && playing) return;  // >>> gate input during playback
-
-        if (useHoldDurationMode)
-        {
-            float hold = Mathf.Clamp(Time.time - pressStartTime, 0.05f, 1.50f);
-            userIntervals.Add(hold);
-            if (userIntervals.Count >= requiredIntervals)
-            {
-                capturing = false;
-                Evaluate();   // >>> defer decision until end
-            }
-        }
-        pressStartTime = -1f;
+        EndHold();
     }
 
-    // ===== evaluate =====
+    // ========= EVALUATION =========
 
     void Evaluate()
     {
@@ -404,10 +456,10 @@ public class RhythmControllerV1 : MonoBehaviour
         }
         else
         {
-            hadAnyMismatchThisAttempt = true;   // >>> remember but don’t stop the flow
+            hadAnyMismatchThisAttempt = true;
         }
 
-        // >>> Always advance to next segment; decide success/fail only at the end
+        // Always advance to next segment
         currentSegment++;
         if (currentSegment < totalSegments)
         {
@@ -433,10 +485,9 @@ public class RhythmControllerV1 : MonoBehaviour
         {
             authenticated = false;
             StopAndSilence(StopReason.EvaluateFail);
-            OnMorseCodeIncorrect?.Invoke();           // >>> shown only after all segments
+            OnMorseCodeIncorrect?.Invoke();
             if (autoReplayOnFail)
             {
-                // reset for a clean retry
                 currentSegment = 0;
                 hadAnyMismatchThisAttempt = false;
                 StartCoroutine(StartSegment(currentSegment));
@@ -444,7 +495,7 @@ public class RhythmControllerV1 : MonoBehaviour
         }
     }
 
-    // ===== utilities =====
+    // ========= UTILITIES =========
 
     static void Normalize(List<float> s)
     {
@@ -463,7 +514,6 @@ public class RhythmControllerV1 : MonoBehaviour
         return mae;
     }
 
-    // ---- targeted stops ----
     void StopPlayback()
     {
         if (_playbackCo != null)
@@ -494,6 +544,7 @@ public class RhythmControllerV1 : MonoBehaviour
         StopAllCoroutines();
         capturing = false;
         playing = false;
+        pressStartTime = -1f;
         hapticController?.SendHapticImpulse(0f, 0.001f);
     }
 }
