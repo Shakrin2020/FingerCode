@@ -30,4 +30,15 @@ public class StartOtpOnEnable : MonoBehaviour
         }
         _arming = false;
     }
+
+    public void ForceStart()
+    {
+        StartFromPhase0();
+    }
+
+    private void StartFromPhase0()
+    {
+        rhythm.StartFromPhase0();
+    }
+
 }

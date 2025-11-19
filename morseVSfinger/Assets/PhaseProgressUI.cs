@@ -10,6 +10,7 @@ public class PhaseProgressUI : MonoBehaviour
     [SerializeField] string phase1Text = "Phase 1";
     [SerializeField] string phase2Text = "Phase 2";
     [SerializeField] string phase3Text = "Phase 3";
+    [SerializeField] string phase4Text = "Phase 4";
     [SerializeField] string successText = "Success";
     [SerializeField] string mismatchText = "OTP Code Mismatch – Try Again";
 

@@ -77,6 +77,7 @@ public class FingerprintWsClient : MonoBehaviour
 
     public async void StartEnroll(string name) => await SendText($"register:{Escape(name)}");
     public async void StartVerify(string name) => await SendText($"verify:{Escape(name)}");
+    public async void SendExists(string name) => await SendText($"exists:{Escape(name)}");
 
     public async void QueryState() => await SendText("state");
     public async void StartContinuous(string name) => await SendText($"cont_start:{Escape(name)}");

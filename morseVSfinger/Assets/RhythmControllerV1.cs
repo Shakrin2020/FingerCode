@@ -10,7 +10,7 @@ public class RhythmControllerV1 : MonoBehaviour
 {
     [Header("Classification (two-class: short/long)")]
     [SerializeField] bool requireClassMatch = true;
-    [SerializeField] float shortLongCut = 0.45f;   // < cut ⇒ 'S', ≥ cut ⇒ 'L'
+    [SerializeField] float shortLongCut = 0.45f;   // (not used now, kept for inspector)
 
     [Header("Strictness")]
     [SerializeField] bool strictCountMatch = true;
@@ -77,11 +77,14 @@ public class RhythmControllerV1 : MonoBehaviour
     public float HeldValue => Mathf.Clamp01(HeldSeconds / Mathf.Max(0.0001f, dashSeconds));
     public float DotThresholdNorm => Mathf.Clamp01(dotSeconds / Mathf.Max(0.0001f, dashSeconds));
 
-    private readonly List<List<float>> targets = new();  // per-segment targets
+    // NEW: for the UI to know when capture window is active
+    public bool IsCapturing => capturing;
 
-    // --- internals ---
+    // ---- internal state ----
+    private readonly List<List<float>> targets = new();  // per-segment targets
     private readonly List<float> target = new();
     private readonly List<float> userIntervals = new();
+
     private float lastTap = -1f;
     private bool capturing = false, playing = false;
     private int accentIndex = -1;
@@ -139,34 +142,21 @@ public class RhythmControllerV1 : MonoBehaviour
             capturing = false;
             Evaluate();
         }
-
-#if UNITY_EDITOR || UNITY_STANDALONE
-        // Editor / Standalone mouse fallback: click ANYWHERE in Game view
-        if (Mouse.current != null)
-        {
-            if (Mouse.current.leftButton.wasPressedThisFrame)
-                BeginHold();
-
-            if (Mouse.current.leftButton.wasReleasedThisFrame)
-                EndHold();
-        }
-#endif
     }
 
-    char Classify(float v)
+    // ========= Classification =========
+
+    // Dot/long classification: "closer to dotSeconds or dashSeconds?"
+    private char Classify(float v)
     {
-        // Compare this hold to the ideal dot and dash durations.
         float diffDot = Mathf.Abs(v - dotSeconds);
         float diffDash = Mathf.Abs(v - dashSeconds);
-
-        // If it's closer to dotSeconds → 'S', otherwise 'L'
         return (diffDot <= diffDash) ? 'S' : 'L';
     }
 
-
     // ========= FLOW / PUBLIC ENTRY POINTS =========
 
-    IEnumerator BeginOtp()
+    private IEnumerator BeginOtp()
     {
         GeneratePatternFromTotp();
         StopPlayback();
@@ -175,7 +165,7 @@ public class RhythmControllerV1 : MonoBehaviour
         StartCapture();
     }
 
-    void StartCapture()
+    private void StartCapture()
     {
         userIntervals.Clear();
         lastTap = -1f;
@@ -186,22 +176,37 @@ public class RhythmControllerV1 : MonoBehaviour
     // Call from UI to restart from first phase
     public void StartFromPhase0()
     {
+        if (!gameObject.activeInHierarchy || !isActiveAndEnabled)
+        {
+            Debug.LogWarning("[Rhythm] StartFromPhase0 called while AuthenticationController is inactive.");
+            return;
+        }
+
         StopAndSilence();
         authenticated = false;
         attemptCounter++;
         hadAnyMismatchThisAttempt = false;
         currentSegment = 0;
-        StartCoroutine(StartSegment(currentSegment));
+
+        // OLD: StartSegment(currentSegment);
+        StartSegmentSafe(currentSegment);       
     }
+
 
     // ========= GENERATION & PLAYBACK =========
 
     void BuildTargetsIfNeeded()
     {
-        if (targets.Count == totalSegments) return;
+        // If we don't want per-attempt randomization, reuse existing targets once built
+        if (!perAttemptRandomize && targets.Count == totalSegments)
+            return;
 
+        // For per-attempt randomization, always rebuild
         targets.Clear();
+
+        // Base seed from TOTP, mixed with attemptCounter so each new attempt differs
         int baseSeed = (totp != null) ? totp.GetCurrentSeed32() : 123456789;
+        baseSeed ^= attemptCounter * 92837111;
 
         for (int seg = 0; seg < totalSegments; seg++)
         {
@@ -220,13 +225,14 @@ public class RhythmControllerV1 : MonoBehaviour
         }
     }
 
+
     private enum StopReason
     {
         Manual, OnDisable, IdleTimeout, EvaluateFail, EmptyInput, CountMismatch, ClassMismatch,
         PhasePass, AllPass, Unknown
     }
 
-    void GeneratePatternFromTotp()
+    private void GeneratePatternFromTotp()
     {
         BuildTargetsIfNeeded();
 
@@ -291,7 +297,7 @@ public class RhythmControllerV1 : MonoBehaviour
         SafePulse(0.25f, amplitude);
     }
 
-    void SafePulse(float duration, float amp)
+    private void SafePulse(float duration, float amp)
     {
         if (hapticController == null) return;
 
@@ -301,9 +307,10 @@ public class RhythmControllerV1 : MonoBehaviour
         hapticController.SendHapticImpulse(Mathf.Clamp01(amp), duration);
     }
 
-    IEnumerator StartSegment(int seg)
+    private IEnumerator StartSegment(int seg)
     {
         _inPhaseTransition = true;
+
         BuildTargetsIfNeeded();
 
         target.Clear();
@@ -314,12 +321,19 @@ public class RhythmControllerV1 : MonoBehaviour
         OnSegmentStart?.Invoke(seg);
 
         capturing = false;
+
+        // Play the pattern (left controller haptics)
         yield return StartCoroutine(PlayOnce());
+
+        // Immediately after pattern finishes, we will start capture.
+        // UISliderHandler will detect capturing == true and flash green.
         StartCapture();
 
         yield return new WaitForSeconds(0.08f);
         _inPhaseTransition = false;
     }
+
+    // ========= INPUT HANDLING =========
 
     // Wrapper so old call sites still compile
     private void RegisterTap(float now) => RegisterTapOnset(now);
@@ -343,9 +357,6 @@ public class RhythmControllerV1 : MonoBehaviour
         SafePulse(0.04f, 0.4f); // tiny ack tick
     }
 
-    // ========= INPUT HANDLING =========
-
-    // Core hold logic used by both InputAction + mouse
     private void BeginHold()
     {
         if (!capturing) return;
@@ -377,7 +388,7 @@ public class RhythmControllerV1 : MonoBehaviour
                 $"raw={rawHold:F3}s  (dotSeconds={dotSeconds:F3}, dashSeconds={dashSeconds:F3})"
             );
 
-            // Keep behaviour the same as before (just clamp extremes)
+            // Clamp extremes
             float hold = Mathf.Clamp(rawHold, 0.05f, 1.50f);
             userIntervals.Add(hold);
 
@@ -390,8 +401,6 @@ public class RhythmControllerV1 : MonoBehaviour
 
         pressStartTime = -1f;
     }
-
-
 
     // called by Input System (controller trigger etc.)
     private void OnPress(InputAction.CallbackContext ctx)
@@ -406,7 +415,7 @@ public class RhythmControllerV1 : MonoBehaviour
 
     // ========= EVALUATION =========
 
-    void Evaluate()
+    private void Evaluate()
     {
         var a = new List<float>(target);
         var b = new List<float>(userIntervals);
@@ -463,7 +472,7 @@ public class RhythmControllerV1 : MonoBehaviour
         currentSegment++;
         if (currentSegment < totalSegments)
         {
-            StartCoroutine(StartSegment(currentSegment));
+            StartSegmentSafe(currentSegment);
         }
         else
         {
@@ -472,7 +481,7 @@ public class RhythmControllerV1 : MonoBehaviour
         }
     }
 
-    void FinishAttempt(bool success)
+    private void FinishAttempt(bool success)
     {
         if (success)
         {
@@ -490,20 +499,20 @@ public class RhythmControllerV1 : MonoBehaviour
             {
                 currentSegment = 0;
                 hadAnyMismatchThisAttempt = false;
-                StartCoroutine(StartSegment(currentSegment));
+                StartSegmentSafe(currentSegment);
             }
         }
     }
 
     // ========= UTILITIES =========
 
-    static void Normalize(List<float> s)
+    private static void Normalize(List<float> s)
     {
         float sum = Mathf.Max(s.Sum(), 1e-6f);
         for (int i = 0; i < s.Count; i++) s[i] /= sum;
     }
 
-    static float Mae(List<float> x, List<float> y)
+    private static float Mae(List<float> x, List<float> y)
     {
         int n = Mathf.Min(x.Count, y.Count);
         if (n == 0) return 1f;
@@ -514,7 +523,19 @@ public class RhythmControllerV1 : MonoBehaviour
         return mae;
     }
 
-    void StopPlayback()
+    private void StartSegmentSafe(int seg)
+    {
+        // If this object (or any of its parents) is inactive, don't start coroutines
+        if (!gameObject.activeInHierarchy || !isActiveAndEnabled)
+        {
+            Debug.LogWarning($"[Rhythm] Ignoring StartSegment({seg}) because object is inactive.");
+            return;
+        }
+
+        StartCoroutine(StartSegment(seg));
+    }
+
+    private void StopPlayback()
     {
         if (_playbackCo != null)
         {
@@ -524,7 +545,7 @@ public class RhythmControllerV1 : MonoBehaviour
         playing = false;
     }
 
-    void StopPhaseTick()
+    private void StopPhaseTick()
     {
         if (_phaseTickCo != null)
         {
