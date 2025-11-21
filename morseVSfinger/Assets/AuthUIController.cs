@@ -21,25 +21,27 @@ public class AuthUIController : MonoBehaviour
     [SerializeField] Button fingerprintMethodButton;          // green "Fingerprint" button
     [SerializeField] Button morseMethodButton;                // green "Morse Code" button
 
-    [Header("OTP panel (Morse UI)")]
-    [SerializeField] GameObject otpPanel;                     // UIController/OTP
-
     [Header("Fingerprint prompt panel (RegFingerPrint)")]
     [SerializeField] GameObject fingerprintPanel;             // UIController/RegFingerPrint
     [SerializeField] TMP_Text fingerprintText;                // RegFingerPrint/Text (TMP)
     [SerializeField] Button okButton;
     [SerializeField] TMP_Text okButtonLabel;
 
+    [Header("OTP panel (Morse UI)")]
+    [SerializeField] GameObject otpPanel;
+
     bool _busy;
     bool _subscribed;
-    bool _waitingForExistCheck;
 
     enum Flow { None, Register, Login }
     Flow _flow = Flow.None;
 
     // who is currently registering / logging in
     string _currentUserName;
+    bool _waitingForExistCheck;
+
     string _pendingRegisterName;
+
 
     void Awake()
     {
@@ -74,6 +76,7 @@ public class AuthUIController : MonoBehaviour
 
         EnsureWsSubscriptions();
     }
+
 
     void OnEnable()
     {
@@ -120,6 +123,8 @@ public class AuthUIController : MonoBehaviour
         _subscribed = true;
     }
 
+    // ===== Buttons (manual name typed) =====
+
     public void OnPressRegister()
     {
         if (_busy) return;
@@ -134,7 +139,7 @@ public class AuthUIController : MonoBehaviour
         _pendingRegisterName = name;
         _flow = Flow.Register;
 
-        SetPanels(false, $"Hi {name}! Get ready to REGISTER!\n\nPress OK to start.");
+        SetPanels(false, $"Hi {name},\nPlease place your fingerprint to REGISTER.\n\nPress OK to start.");
 
         if (okButton)
         {
@@ -144,7 +149,6 @@ public class AuthUIController : MonoBehaviour
             okButton.interactable = true;
         }
     }
-
 
     // LOGIN BUTTON: send exists:<name> to ESP, then wait for reply
     public void OnPressLogin()
@@ -185,9 +189,10 @@ public class AuthUIController : MonoBehaviour
         }
 
         // After we start enroll, we want the OK button to be controlled by the device again
-        //DisableOk();             // will be re-enabled by "press a" messages
+        DisableOk();             // will be re-enabled by "press a" messages
         _ = RegisterFlow(_pendingRegisterName);
     }
+
 
     // show the "Select Authentication Method" panel
     void ShowAuthMethodPanel()
@@ -195,8 +200,12 @@ public class AuthUIController : MonoBehaviour
         if (loginPanel) loginPanel.SetActive(false);
         if (fingerprintPanel) fingerprintPanel.SetActive(false);
         if (authMethodPanel) authMethodPanel.SetActive(true);
-        if (okButton) okButton.gameObject.SetActive(false); // no OK button on method panel
         if (otpPanel) otpPanel.SetActive(false);
+
+        if (okButton)
+        {
+            okButton.gameObject.SetActive(false); // no OK button on method panel
+        }
     }
 
     async Task RegisterFlow(string name)
@@ -239,27 +248,26 @@ public class AuthUIController : MonoBehaviour
     }
 
     // called from the Morse Code button on the method panel
+    // called from the Morse Code button on the method panel
     public void OnChooseMorse()
     {
         if (_busy || _waitingForExistCheck) return;
 
-        // hide other panels
+        // hide the method-choice panel
         if (authMethodPanel) authMethodPanel.SetActive(false);
-        if (loginPanel) loginPanel.SetActive(false);
+
+        // hide fingerprint prompt (if it was ever shown)
         if (fingerprintPanel) fingerprintPanel.SetActive(false);
 
-        // show Phases (otpPanel now = Phases)
-        if (otpPanel)
-        {
-            Debug.Log($"[AuthUI] OnChooseMorse enabling otpPanel = {otpPanel.name}, wasActive={otpPanel.activeSelf}");
-            otpPanel.SetActive(true);
-            Debug.Log($"[AuthUI] otpPanel activeAfter={otpPanel.activeSelf}");
-        }
+        // show the OTP / Morse UI panel
+        if (otpPanel) otpPanel.SetActive(true);
 
         Debug.Log($"[AuthUI] Start Morse-code login for user '{_currentUserName}'");
-        // later you can also start any Morse-specific controller here
-    }
 
+        // TODO: kick off your existing Morse/OTP logic here
+        // e.g. if you have a controller script:
+        // MorseOtpController.Instance.BeginLogin(_currentUserName);
+    }
 
 
     async Task LoginFlow()
@@ -324,8 +332,7 @@ public class AuthUIController : MonoBehaviour
     {
         _flow = Flow.Login;
         SetPanels(false, $"User: {displayName}\nPlace your finger on the sensor…");
-        //DisableOk(); // will be enabled when device tells to press A
-        //ShowOkBackToMethods();
+        DisableOk(); // will be enabled when device tells to press A
     }
 
     // ===== OK button modes =====
@@ -345,32 +352,6 @@ public class AuthUIController : MonoBehaviour
         okButton.onClick.AddListener(BackToLogin);
         if (okButtonLabel) okButtonLabel.text = "Back";
         okButton.interactable = true;
-    }
-
-    void BackToMethodPanel()
-    {
-        // hide fingerprint prompt
-        if (fingerprintPanel) fingerprintPanel.SetActive(false);
-
-        // show the SelectMethod panel (Fingerprint / Morse)
-        if (authMethodPanel) authMethodPanel.SetActive(true);
-    }
-
-    void ShowOkBackToMethods()
-    {
-        if (!okButton) return;
-        okButton.onClick.RemoveAllListeners();
-        okButton.onClick.AddListener(BackToMethodPanel);   // <-- go to SelectMethod
-        if (okButtonLabel) okButtonLabel.text = "Back";
-        okButton.interactable = true;
-    }
-
-    void HideOk()
-    {
-        if (!okButton) return;
-
-        okButton.onClick.RemoveAllListeners();
-        okButton.gameObject.SetActive(false);   // hide it
     }
 
     void DisableOk()
@@ -407,27 +388,13 @@ public class AuthUIController : MonoBehaviour
             return;
         }
 
-        if (p.Contains("wrong finger"))
+        if (step >= 6 || p.Contains("registration done") || p.Contains("verified"))
         {
-            // message text is already "wrong finger"
-            ShowOkBackToMethods();   // keep OK enabled, go back to SelectMethod
+            ShowOkBack();
             return;
         }
 
-        if (step >= 6 || p.Contains("registration done"))
-        {
-            HideOk();              // still uses BackToLogin()
-            return;
-        }
-
-        // verified (login success) -> go to SelectMethod panel
-        if (p.Contains("verified"))
-        {
-            ShowOkBackToMethods();     // new behaviour
-            return;
-        }
-
-        //DisableOk();
+        DisableOk();
     }
 
     void HandleDeviceMsg(string msg)
@@ -448,20 +415,17 @@ public class AuthUIController : MonoBehaviour
 
             if (p.Contains("user not found"))
             {
-                // stay on login panel, show error
+                // Show error on the fingerprint panel (same style as other messages)
                 SetPanels(false, "User not found. Please register first.");
-                ShowOkBack();   // if want the Back button
+                ShowOkBack();   // if you want the Back button
                 return;
             }
 
             if (p.Contains("user exist"))
             {
-                // valid name -> show method-selection panel
                 ShowAuthMethodPanel();
                 return;
             }
-
-            // if message is something else, just fall through
         }
 
         // ----- 2) Normal fingerprint flow (unchanged) -----
@@ -479,7 +443,6 @@ public class AuthUIController : MonoBehaviour
         if (fingerprintText) fingerprintText.text = msg;
     }
 
-
     public void BackToLogin()
     {
         _flow = Flow.None;
@@ -490,6 +453,7 @@ public class AuthUIController : MonoBehaviour
         SetPanels(true, "");
         if (userNameField) userNameField.text = "";
     }
+
 
     // ---------- UI helper ----------
     // showLogin = true → login panel

@@ -189,7 +189,7 @@ public class RhythmControllerV1 : MonoBehaviour
         currentSegment = 0;
 
         // OLD: StartSegment(currentSegment);
-        StartSegmentSafe(currentSegment);       
+        StartSegmentSafe(currentSegment);
     }
 
 
