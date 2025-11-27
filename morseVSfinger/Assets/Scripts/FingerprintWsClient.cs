@@ -29,6 +29,11 @@ public class FingerprintWsClient : MonoBehaviour
     public event Action<int, string> OnEnrollSample;        // parsed progress: (step 0..6, pretty text)
     public event Action<UserProfile[]> OnUsersList;         // fired when device returns the registered users list
 
+    // NEW: timer events for UI
+    public event Action<int> OnEnrollTimer;                 // seconds left during enrollment
+    public event Action<int> OnVerifyTimer;                 // seconds left during verify
+
+
     // ---------- Internals ----------
     WebSocket ws;
     bool isConnecting;
@@ -161,7 +166,33 @@ public class FingerprintWsClient : MonoBehaviour
         var raw = Encoding.UTF8.GetString(bytes);
         var lower = raw.ToLowerInvariant();
 
-        // TEMP: echo all non-JSON device lines straight to the UI to prove the path
+        Debug.Log("[WS] <= " + raw);
+
+        // ---------- 1) TIMER MESSAGES (handle and STOP here) ----------
+        const string enrollPrefix = "enroll_timer:";
+        const string verifyPrefix = "verify_timer:";
+
+        if (raw.StartsWith(enrollPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            string payload = raw.Substring(enrollPrefix.Length).Trim();
+            if (int.TryParse(payload, out int secs))
+            {
+                OnEnrollTimer?.Invoke(secs);   // update small timer text
+            }
+            return;                            // IMPORTANT: do NOT continue to rest of function
+        }
+
+        if (raw.StartsWith(verifyPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            string payload = raw.Substring(verifyPrefix.Length).Trim();
+            if (int.TryParse(payload, out int secs))
+            {
+                OnVerifyTimer?.Invoke(secs);
+            }
+            return;                            // IMPORTANT
+        }
+
+        // ---------- 2) DEV ECHO (unchanged) ----------
         if (devEchoToUI)
         {
             // ignore JSON/status like {"sensorReady":...}
@@ -173,15 +204,11 @@ public class FingerprintWsClient : MonoBehaviour
             }
         }
 
-        Debug.Log("[WS] <= " + raw);
-
-        // --- JSON handling (users list, etc.) ---
+        // ---------- 3) JSON handling (unchanged) ----------
         if (raw.Length > 0 && raw[0] == '{')
         {
             try
             {
-                // Expect shape from UserModels.cs:
-                //   { "type":"USERS", "users":[ {"username":"...", "displayName":"..."} ] }
                 var maybeUsers = JsonUtility.FromJson<UsersResponse>(raw);
                 if (maybeUsers != null && !string.IsNullOrEmpty(maybeUsers.type))
                 {
@@ -191,10 +218,7 @@ public class FingerprintWsClient : MonoBehaviour
                         OnDeviceMessage?.Invoke(raw);
                         return; // handled
                     }
-
-                    // Add more JSON types here if you emit them (e.g., LOGIN result, STATE, etc.)
-                    // Example:
-                    // if (maybe.type.Equals("LOGIN", StringComparison.OrdinalIgnoreCase)) { ... return; }
+                    // other JSON types (if you add them)...
                 }
             }
             catch
@@ -203,7 +227,7 @@ public class FingerprintWsClient : MonoBehaviour
             }
         }
 
-        // --- Existing enrollment / progress parsing (text) ---
+        // ---------- 4) Existing enrollment / progress parsing (unchanged) ----------
 
         // Completed
         if (lower.Contains("registration done") || lower.Contains("enroll done") || lower.Contains("complete"))
@@ -234,7 +258,8 @@ public class FingerprintWsClient : MonoBehaviour
         {
             int next = mStartS.Groups[1].Value[0] - '0';
             Debug.Log($"[WS] PARSED: next start S{next}");
-            OnEnrollSample?.Invoke(Mathf.Clamp(enrollStep, 0, 6), $"Start S{next}: Place your Finger, press OK and lift your finger.");
+            OnEnrollSample?.Invoke(Mathf.Clamp(enrollStep, 0, 6),
+                $"Start S{next}: Place your Finger, press OK and lift your finger.");
             OnDeviceMessage?.Invoke(raw);
             return;
         }
@@ -257,6 +282,8 @@ public class FingerprintWsClient : MonoBehaviour
         // Fallback: forward any unparsed line to listeners
         OnDeviceMessage?.Invoke(raw);
     }
+
+
 
     // ========= Helpers =========
 

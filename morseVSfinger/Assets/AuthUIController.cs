@@ -27,6 +27,9 @@ public class AuthUIController : MonoBehaviour
     [SerializeField] Button okButton;
     [SerializeField] TMP_Text okButtonLabel;
 
+    [Header("Fingerprint timer")]
+    [SerializeField] TMP_Text timerText;                      // NEW: RegFingerPrint/Timer (TMP)
+
     [Header("OTP panel (Morse UI)")]
     [SerializeField] GameObject otpPanel;
 
@@ -41,7 +44,7 @@ public class AuthUIController : MonoBehaviour
     bool _waitingForExistCheck;
 
     string _pendingRegisterName;
-
+    bool _verifyInProgressUI = false;
 
     void Awake()
     {
@@ -86,9 +89,13 @@ public class AuthUIController : MonoBehaviour
         // Make sure we don't double-subscribe
         ws.OnEnrollSample -= HandleEnrollSample;
         ws.OnDeviceMessage -= HandleDeviceMsg;
+        ws.OnEnrollTimer -= HandleTimer;   // NEW
+        ws.OnVerifyTimer -= HandleTimer;   // NEW
 
         ws.OnEnrollSample += HandleEnrollSample;
         ws.OnDeviceMessage += HandleDeviceMsg;
+        ws.OnEnrollTimer += HandleTimer;   // NEW
+        ws.OnVerifyTimer += HandleTimer;   // NEW
         _subscribed = true;
     }
 
@@ -99,6 +106,8 @@ public class AuthUIController : MonoBehaviour
 
         ws.OnEnrollSample -= HandleEnrollSample;
         ws.OnDeviceMessage -= HandleDeviceMsg;
+        ws.OnEnrollTimer -= HandleTimer;   // NEW
+        ws.OnVerifyTimer -= HandleTimer;   // NEW
         _subscribed = false;
     }
 
@@ -109,6 +118,8 @@ public class AuthUIController : MonoBehaviour
         {
             ws.OnEnrollSample -= HandleEnrollSample;
             ws.OnDeviceMessage -= HandleDeviceMsg;
+            ws.OnEnrollTimer -= HandleTimer;   // NEW
+            ws.OnVerifyTimer -= HandleTimer;   // NEW
         }
         _subscribed = false;
     }
@@ -120,6 +131,8 @@ public class AuthUIController : MonoBehaviour
 
         ws.OnEnrollSample += HandleEnrollSample;
         ws.OnDeviceMessage += HandleDeviceMsg;
+        ws.OnEnrollTimer += HandleTimer;   // NEW
+        ws.OnVerifyTimer += HandleTimer;   // NEW
         _subscribed = true;
     }
 
@@ -136,19 +149,16 @@ public class AuthUIController : MonoBehaviour
             return;
         }
 
+        // Store the name, but DO NOT start fingerprint yet
         _pendingRegisterName = name;
+        _currentUserName = name;
         _flow = Flow.Register;
 
-        SetPanels(false, $"Hi {name},\nPlease place your fingerprint to REGISTER.\n\nPress OK to start.");
-
-        if (okButton)
-        {
-            okButton.onClick.RemoveAllListeners();
-            okButton.onClick.AddListener(OnConfirmRegisterOk);
-            if (okButtonLabel) okButtonLabel.text = "OK";
-            okButton.interactable = true;
-        }
+        // Go to "Choose authentication method" screen
+        SetPanels(true, "");        // reset to login-style base UI
+        ShowAuthMethodPanel();      // this hides login panel and shows AuthMethod panel
     }
+
 
     // LOGIN BUTTON: send exists:<name> to ESP, then wait for reply
     public void OnPressLogin()
@@ -242,12 +252,36 @@ public class AuthUIController : MonoBehaviour
     public async void OnChooseFingerprint()
     {
         if (_busy) return;
+
         if (authMethodPanel) authMethodPanel.SetActive(false);
 
-        await LoginFlow();
+        if (_flow == Flow.Register)
+        {
+            // REGISTER FLOW: enroll fingerprint for the name we just entered
+            if (string.IsNullOrEmpty(_pendingRegisterName))
+            {
+                SetPanels(true, "Please enter your name first.");
+                return;
+            }
+
+            var name = _pendingRegisterName;
+
+            // Show the fingerprint panel *right now* with a friendly message
+            SetPanels(false, $"Hi {name},\nPlace your finger on the sensor to REGISTER.");
+            //DisableOk();  // OK will be enabled by "start s1 / press a" messages
+
+            // Now actually tell the ESP to start enrolling
+            await RegisterFlow(name);
+        }
+        else
+        {
+            // LOGIN FLOW (unchanged): fingerprint login
+            await LoginFlow();
+        }
     }
 
-    // called from the Morse Code button on the method panel
+
+
     // called from the Morse Code button on the method panel
     public void OnChooseMorse()
     {
@@ -265,15 +299,14 @@ public class AuthUIController : MonoBehaviour
         Debug.Log($"[AuthUI] Start Morse-code login for user '{_currentUserName}'");
 
         // TODO: kick off your existing Morse/OTP logic here
-        // e.g. if you have a controller script:
-        // MorseOtpController.Instance.BeginLogin(_currentUserName);
     }
 
 
     async Task LoginFlow()
     {
         _flow = Flow.Login;
-        if (_busy) return;
+        if (_busy || _verifyInProgressUI) return;
+
         _busy = true;
         try
         {
@@ -296,6 +329,7 @@ public class AuthUIController : MonoBehaviour
 
             if (!await ws.EnsureConnectedAsync()) { SetPanels(false, "Device not found."); return; }
 
+            _verifyInProgressUI = true;
             ws.StartVerify(name);
         }
         finally { _busy = false; }
@@ -326,6 +360,7 @@ public class AuthUIController : MonoBehaviour
         }
 
         ws.StartVerify(username);
+        _verifyInProgressUI = true;
     }
 
     public void GoToFingerprintPrompt(string displayName)
@@ -388,14 +423,63 @@ public class AuthUIController : MonoBehaviour
             return;
         }
 
-        if (step >= 6 || p.Contains("registration done") || p.Contains("verified"))
+        /*if (p.Contains("sample") && p.Contains("saved"))
         {
-            ShowOkBack();
+            if (timerText) timerText.text = "";   // clear old countdown
+                                                  // you can choose to enable OK here if you want:
+            ShowOkPressA();                                   
+            return;
+        }*/
+
+        if (p.Contains("registration failed") || p.Contains("timeout"))
+        {
+            if (fingerprintText)
+                fingerprintText.text = "Registration failed (timeout). Please try again.";
+
+            if (timerText) timerText.text = "";   // clear "Timer: 2s left"
+            ShowOkBack();                         // change OK → Back
+            _verifyInProgressUI = false;
             return;
         }
 
-        DisableOk();
+
+        if (step >= 6 || p.Contains("registration done") || p.Contains("verified"))
+        {
+            ShowOkBack();
+            _verifyInProgressUI = false;
+            if (timerText) timerText.text = "";
+            return;
+        }
+
+        //DisableOk();
     }
+
+    // NEW: timer handler – just updates the small timer text
+    void HandleTimer(int secs)
+    {
+        if (!fingerprintPanel || !fingerprintPanel.activeInHierarchy) return;
+        if (!timerText) return;
+
+        Debug.Log($"[AuthUI] Timer update: {secs}");
+
+        if (secs <= 0)
+        {
+            timerText.text = "";
+            return;
+        }
+
+        timerText.text = $"Timer: {secs}s left";
+    }
+
+
+    /*void HandleTimer(int secs)
+    {
+        if (!fingerprintPanel || !fingerprintPanel.activeInHierarchy) return;
+        if (!timerText) return;
+
+        timerText.text = secs > 0 ? $"Timer: {secs}s left" : "";
+    }*/
+
 
     void HandleDeviceMsg(string msg)
     {
@@ -415,9 +499,8 @@ public class AuthUIController : MonoBehaviour
 
             if (p.Contains("user not found"))
             {
-                // Show error on the fingerprint panel (same style as other messages)
                 SetPanels(false, "User not found. Please register first.");
-                ShowOkBack();   // if you want the Back button
+                ShowOkBack();
                 return;
             }
 
@@ -426,9 +509,30 @@ public class AuthUIController : MonoBehaviour
                 ShowAuthMethodPanel();
                 return;
             }
+
+            // If it's something else, just fall through
         }
 
-        // ----- 2) Normal fingerprint flow (unchanged) -----
+        if (p.Contains("registration failed"))
+        {
+            if (fingerprintText)
+                fingerprintText.text = "Registration failed (timeout). Please try again.";
+
+            if (timerText)
+                timerText.text = "";   // stop showing "Timer: 2s left"
+
+            ShowOkBack();
+            _verifyInProgressUI = false;
+            return;
+        }
+
+        // ----- 2) End of a verify attempt (independent of exists check) -----
+        if (p.Contains("verify timeout") || p.Contains("wrong finger") || p.Contains("verified"))
+        {
+            _verifyInProgressUI = false;
+        }
+
+        // ----- 3) Normal fingerprint flow -----
         if (_flow == Flow.None || !fingerprintPanel || !fingerprintPanel.activeInHierarchy)
             return;
 
@@ -442,6 +546,7 @@ public class AuthUIController : MonoBehaviour
         // general device messages during FP flow
         if (fingerprintText) fingerprintText.text = msg;
     }
+
 
     public void BackToLogin()
     {
@@ -463,6 +568,8 @@ public class AuthUIController : MonoBehaviour
         if (loginPanel) loginPanel.SetActive(showLogin);
         if (fingerprintPanel) fingerprintPanel.SetActive(!showLogin);
         if (fingerprintText) fingerprintText.text = message ?? "";
+
+        if (timerText) timerText.text = "";   // NEW: clear timer when switching panels
 
         if (okButton)
         {
