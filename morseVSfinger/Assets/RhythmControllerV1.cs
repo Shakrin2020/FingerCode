@@ -502,6 +502,10 @@ public class RhythmControllerV1 : MonoBehaviour
                 StartSegmentSafe(currentSegment);
             }
         }
+
+        // just INFORM the TrialManager (if it exists).
+        // If there is no TrialManager in the scene, this does nothing.
+        TrialManager.Instance?.OnMorseResult(success);
     }
 
     // ========= UTILITIES =========

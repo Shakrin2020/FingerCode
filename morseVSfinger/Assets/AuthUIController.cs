@@ -251,6 +251,10 @@ public class AuthUIController : MonoBehaviour
     // called from the Fingerprint button on the method panel
     public async void OnChooseFingerprint()
     {
+        if (TrialManager.Instance != null &&
+            TrialManager.Instance.OnUserClickedMethod(AuthMethod.Fingerprint))
+            return;
+
         if (_busy) return;
 
         if (authMethodPanel) authMethodPanel.SetActive(false);
@@ -278,6 +282,12 @@ public class AuthUIController : MonoBehaviour
             // LOGIN FLOW (unchanged): fingerprint login
             await LoginFlow();
         }
+
+        // Tell TrialManager that a fingerprint trial has started (for LOGIN only).
+        if (_flow == Flow.Login)
+        {
+            TrialManager.Instance?.NotifyMethodStarted(AuthMethod.Fingerprint);
+        }
     }
 
 
@@ -285,6 +295,11 @@ public class AuthUIController : MonoBehaviour
     // called from the Morse Code button on the method panel
     public void OnChooseMorse()
     {
+        if (TrialManager.Instance != null &&
+            TrialManager.Instance.OnUserClickedMethod(AuthMethod.Morse))
+            return;
+
+
         if (_busy || _waitingForExistCheck) return;
 
         // hide the method-choice panel
@@ -298,7 +313,10 @@ public class AuthUIController : MonoBehaviour
 
         Debug.Log($"[AuthUI] Start Morse-code login for user '{_currentUserName}'");
 
-        // TODO: kick off your existing Morse/OTP logic here
+        if (_flow == Flow.Login)
+        {
+            TrialManager.Instance?.NotifyMethodStarted(AuthMethod.Morse);
+        }
     }
 
 
@@ -506,6 +524,9 @@ public class AuthUIController : MonoBehaviour
 
             if (p.Contains("user exist"))
             {
+                //notify TrialManager (if it exists)
+                TrialManager.Instance?.OnUserExists(_currentUserName); 
+
                 ShowAuthMethodPanel();
                 return;
             }
@@ -530,6 +551,10 @@ public class AuthUIController : MonoBehaviour
         if (p.Contains("verify timeout") || p.Contains("wrong finger") || p.Contains("verified"))
         {
             _verifyInProgressUI = false;
+
+            //translate message into success/fail for TrialManager
+            bool success = p.Contains("verified");
+            TrialManager.Instance?.OnFingerprintResult(success);
         }
 
         // ----- 3) Normal fingerprint flow -----
