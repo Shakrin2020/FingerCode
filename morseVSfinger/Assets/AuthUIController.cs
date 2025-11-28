@@ -6,6 +6,8 @@ using TMPro;
 /// Attach to UIController
 public class AuthUIController : MonoBehaviour
 {
+    [SerializeField] RhythmControllerV1 rhythmController;   // for Morse timer control
+
     [Header("UserSelection panel (UserSelection)")]
     [SerializeField] GameObject userSelectionPanel;           // UIController/UserSelection
     [SerializeField] Button register;                         // Reg (Button)
@@ -251,6 +253,8 @@ public class AuthUIController : MonoBehaviour
     // called from the Fingerprint button on the method panel
     public async void OnChooseFingerprint()
     {
+        if (rhythmController) rhythmController.StopMorseTimer();
+
         if (TrialManager.Instance != null &&
             TrialManager.Instance.OnUserClickedMethod(AuthMethod.Fingerprint))
             return;
@@ -582,6 +586,8 @@ public class AuthUIController : MonoBehaviour
         if (authMethodPanel) authMethodPanel.SetActive(false);
         SetPanels(true, "");
         if (userNameField) userNameField.text = "";
+
+        if (rhythmController) rhythmController.StopMorseTimer();
     }
 
 

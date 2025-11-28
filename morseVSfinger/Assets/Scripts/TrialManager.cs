@@ -128,6 +128,22 @@ public class TrialManager : MonoBehaviour
         OnAnyTrialFinished(AuthMethod.Morse);
     }
 
+    private IEnumerator SessionCompleteRoutine()
+    {
+        // 🔹 1) Show the popup
+        ShowPopup("Task completed", 3f);   // adjust 3f if you want longer/shorter
+
+        // 🔹 2) Wait so the user can read it
+        yield return new WaitForSeconds(3f);
+
+        // 🔹 3) Then go back to the login / registration panel
+        if (authUI != null)
+        {
+            authUI.BackToLogin();
+        }
+    }
+
+
     void OnAnyTrialFinished(AuthMethod methodJustFinished)
     {
         // attempts AFTER increment
@@ -156,7 +172,7 @@ public class TrialManager : MonoBehaviour
             sessionActive = false;
             Debug.Log($"[TrialManager] All 8 attempts finished for '{currentUser}'.");
 
-            ShowPopup("Task completed", 3f);
+            StartCoroutine(SessionCompleteRoutine());
             return;
         }
 

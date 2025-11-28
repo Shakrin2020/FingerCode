@@ -5,6 +5,8 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.InputSystem;
 using UnityEngine.XR.Interaction.Toolkit;
+using TMPro;
+
 
 public class RhythmControllerV1 : MonoBehaviour
 {
@@ -30,6 +32,10 @@ public class RhythmControllerV1 : MonoBehaviour
     [Header("Timing")]
     public float firstBeatLeadIn = 0.15f;       // UI/music lead-in (after settle)
     [SerializeField] bool startAutomatically = false;
+
+    [SerializeField] TMPro.TMP_Text attemptTimerText;
+    [SerializeField] float attemptTimeout = 30f;   // 30 seconds per phase
+    float attemptStartTime = -1f;                 // set in StartCapture()
 
     [Header("Inputs & Refs")]
     public InputActionReference inputDigit = null;           // trigger/tap
@@ -134,6 +140,9 @@ public class RhythmControllerV1 : MonoBehaviour
 
     void Update()
     {
+        // always refresh the timer text
+        UpdateAttemptTimer();
+
         if (!capturing) return;
 
         // backup end condition if the user stops early
@@ -141,6 +150,14 @@ public class RhythmControllerV1 : MonoBehaviour
         {
             capturing = false;
             Evaluate();
+        }
+
+        // OPTIONAL: if you want timeout to FAIL the phase
+        if (attemptStartTime > 0f && Time.time - attemptStartTime >= attemptTimeout)
+        {
+            attemptStartTime = -1f;
+            capturing = false;
+            FinishAttempt(false);
         }
     }
 
@@ -171,6 +188,9 @@ public class RhythmControllerV1 : MonoBehaviour
         lastTap = -1f;
         capturing = true;
         pressStartTime = -1f;
+
+        //Reset per-phase timer here
+        attemptStartTime = Time.time;
     }
 
     // Call from UI to restart from first phase
@@ -188,10 +208,11 @@ public class RhythmControllerV1 : MonoBehaviour
         hadAnyMismatchThisAttempt = false;
         currentSegment = 0;
 
+       // attemptStartTime = Time.time;
+  
         // OLD: StartSegment(currentSegment);
         StartSegmentSafe(currentSegment);
     }
-
 
     // ========= GENERATION & PLAYBACK =========
 
@@ -282,6 +303,10 @@ public class RhythmControllerV1 : MonoBehaviour
         hadAnyMismatchThisAttempt = false;
 
         if (currentSegment >= totalSegments) currentSegment = 0;
+
+        // start attempt timer
+        //attemptStartTime = Time.time;
+ 
         StartCoroutine(StartSegment(currentSegment));
     }
 
@@ -572,4 +597,32 @@ public class RhythmControllerV1 : MonoBehaviour
         pressStartTime = -1f;
         hapticController?.SendHapticImpulse(0f, 0.001f);
     }
+
+    private void UpdateAttemptTimer()
+    {
+        if (attemptTimerText == null)
+            return;
+
+        // no active timer or invalid timeout
+        if (attemptStartTime <= 0f || attemptTimeout <= 0f)
+        {
+            attemptTimerText.text = "";
+            return;
+        }
+
+        float elapsed = Time.time - attemptStartTime;
+        float remaining = Mathf.Max(0f, attemptTimeout - elapsed);
+
+        // show INT seconds: 30, 29, 28, ...
+        int remainingInt = Mathf.CeilToInt(remaining);
+        attemptTimerText.text = $"Timer: {remainingInt} sec left";
+    }
+
+    public void StopMorseTimer()
+    {
+        attemptStartTime = -1f;
+        if (attemptTimerText)
+            attemptTimerText.text = "";
+    }
+
 }
