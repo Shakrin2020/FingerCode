@@ -34,7 +34,7 @@ public class RhythmControllerV1 : MonoBehaviour
     [SerializeField] bool startAutomatically = false;
 
     [SerializeField] TMPro.TMP_Text attemptTimerText;
-    [SerializeField] float attemptTimeout = 30f;   // 30 seconds per phase
+    [SerializeField] float attemptTimeout = 60f;   // 30 seconds per phase
     float attemptStartTime = -1f;                 // set in StartCapture()
 
     [Header("Inputs & Refs")]
@@ -103,6 +103,9 @@ public class RhythmControllerV1 : MonoBehaviour
     private Coroutine _playbackCo;
     private Coroutine _phaseTickCo;
 
+    public string LastMorseErrorType { get; private set; } = "";
+
+
     // ========= Unity lifecycle =========
 
     void Awake()
@@ -156,9 +159,16 @@ public class RhythmControllerV1 : MonoBehaviour
         if (attemptStartTime > 0f && Time.time - attemptStartTime >= attemptTimeout)
         {
             attemptStartTime = -1f;
-            capturing = false;
-            FinishAttempt(false);
+
+            if (capturing)
+            {
+                capturing = false;
+                LastMorseErrorType = "timeout";   // 🔹 log as timeout
+                FinishAttempt(false);
+            }
+            return;
         }
+
     }
 
     // ========= Classification =========
@@ -190,7 +200,7 @@ public class RhythmControllerV1 : MonoBehaviour
         pressStartTime = -1f;
 
         //Reset per-phase timer here
-        attemptStartTime = Time.time;
+        //attemptStartTime = Time.time;
     }
 
     // Call from UI to restart from first phase
@@ -208,7 +218,7 @@ public class RhythmControllerV1 : MonoBehaviour
         hadAnyMismatchThisAttempt = false;
         currentSegment = 0;
 
-       // attemptStartTime = Time.time;
+        attemptStartTime = Time.time;
   
         // OLD: StartSegment(currentSegment);
         StartSegmentSafe(currentSegment);
@@ -484,6 +494,12 @@ public class RhythmControllerV1 : MonoBehaviour
             }
         }
 
+        if (!segmentPass)
+        {
+            hadAnyMismatchThisAttempt = true;
+            LastMorseErrorType = "mismatch"; 
+        }
+
         if (segmentPass)
         {
             OnSegmentPass?.Invoke(currentSegment);
@@ -510,6 +526,7 @@ public class RhythmControllerV1 : MonoBehaviour
     {
         if (success)
         {
+            LastMorseErrorType = ""; 
             authenticated = true;
             StopAndSilence(StopReason.AllPass);
             OnAllSegmentsPass?.Invoke();
@@ -530,7 +547,9 @@ public class RhythmControllerV1 : MonoBehaviour
 
         // just INFORM the TrialManager (if it exists).
         // If there is no TrialManager in the scene, this does nothing.
-        TrialManager.Instance?.OnMorseResult(success);
+        //TrialManager.Instance?.OnMorseResult(success);
+
+        TrialManager.Instance?.OnMorseResult(success, LastMorseErrorType);
     }
 
     // ========= UTILITIES =========

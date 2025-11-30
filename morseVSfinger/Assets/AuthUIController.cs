@@ -48,6 +48,8 @@ public class AuthUIController : MonoBehaviour
     string _pendingRegisterName;
     bool _verifyInProgressUI = false;
 
+    public string LastDeviceUserId { get; private set; } = "";
+
     void Awake()
     {
         _flow = Flow.None;
@@ -509,7 +511,10 @@ public class AuthUIController : MonoBehaviour
 
         // ignore JSON/status lines
         if (msg.Length > 0 && (msg[0] == '{' || msg.Contains("sensorReady") || msg.Contains("\"op\"")))
-            return;
+        {
+            UpdateDeviceIdFromJson(msg);
+            return;   // keep old behaviour of ignoring JSON for UI text
+        }
 
         var p = msg.ToLowerInvariant();
         Debug.Log($"[AuthUI] DeviceMsg: {p}");
@@ -556,10 +561,23 @@ public class AuthUIController : MonoBehaviour
         {
             _verifyInProgressUI = false;
 
-            //translate message into success/fail for TrialManager
-            bool success = p.Contains("verified");
-            TrialManager.Instance?.OnFingerprintResult(success);
+            if (p.Contains("verify timeout"))
+            {
+                // timeout case
+                TrialManager.Instance?.OnFingerprintResult(false, "timeout");
+            }
+            else if (p.Contains("wrong finger"))
+            {
+                // mismatch / wrong finger
+                TrialManager.Instance?.OnFingerprintResult(false, "mismatch");
+            }
+            else if (p.Contains("verified"))
+            {
+                // success
+                TrialManager.Instance?.OnFingerprintResult(true, "none");
+            }
         }
+
 
         // ----- 3) Normal fingerprint flow -----
         if (_flow == Flow.None || !fingerprintPanel || !fingerprintPanel.activeInHierarchy)
@@ -574,6 +592,40 @@ public class AuthUIController : MonoBehaviour
 
         // general device messages during FP flow
         if (fingerprintText) fingerprintText.text = msg;
+    }
+
+    public void UpdateDeviceIdFromJson(string json)
+    {
+        if (string.IsNullOrEmpty(json) || json[0] != '{') return;
+
+        // find `"last"`
+        int lastIdx = json.IndexOf("\"last\"");
+        if (lastIdx < 0) return;
+
+        // find `"id":` after `"last"`
+        int idIdx = json.IndexOf("\"id\":", lastIdx);
+        if (idIdx < 0) return;
+
+        int numStart = idIdx + "\"id\":".Length;
+
+        // skip spaces
+        while (numStart < json.Length && char.IsWhiteSpace(json[numStart]))
+            numStart++;
+
+        // collect digits (and optional minus)
+        string digits = "";
+        int i = numStart;
+        while (i < json.Length && (char.IsDigit(json[i]) || json[i] == '-'))
+        {
+            digits += json[i];
+            i++;
+        }
+
+        if (int.TryParse(digits, out int id))
+        {
+            LastDeviceUserId = id.ToString();
+            Debug.Log("[WS] Parsed device user ID = " + LastDeviceUserId);
+        }
     }
 
 

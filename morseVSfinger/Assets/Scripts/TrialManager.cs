@@ -44,6 +44,10 @@ public class TrialManager : MonoBehaviour
     bool morsePracticeFinished = false;
     bool practiceDonePopupShown = false;
 
+    float fingerprintTrialStartTime = -1f;
+    float morseTrialStartTime = -1f;
+
+
     void Awake()
     {
         if (Instance != null && Instance != this)
@@ -107,23 +111,71 @@ public class TrialManager : MonoBehaviour
     }
 
     // Call this AFTER a fingerprint login attempt completed
-    public void OnFingerprintResult(bool success)
+    public void OnFingerprintResult(bool success, string errorType = "")
     {
         if (!experimentEnabled || !sessionActive) return;
 
         IncAttempts(AuthMethod.Fingerprint);
-        Debug.Log($"[TrialManager] FP attempt #{fingerprintAttempts} for '{currentUser}', success={success}");
+        int attemptIndex = fingerprintAttempts;
+        bool isPractice = (attemptIndex == 1);
+
+        float duration = 0f;
+        if (fingerprintTrialStartTime > 0f)
+            duration = Time.time - fingerprintTrialStartTime;
+
+        int errorFlag = success ? 0 : 1;
+
+        // 🔹 get device user id from AuthUI
+        string deviceUserId = authUI != null ? authUI.LastDeviceUserId : "";
+
+        // 🔹 if we didn’t pass any errorType, deduce from success
+        if (string.IsNullOrEmpty(errorType))
+            errorType = success ? "" : "mismatch";    // fingerprint has its own messages though
+
+        CSVLogger.Instance?.LogTrial(
+            currentUser,
+            "fingerprint",
+            attemptIndex,
+            isPractice,
+            success,
+            duration,
+            errorFlag,
+            deviceUserId,
+            errorType
+        );
 
         OnAnyTrialFinished(AuthMethod.Fingerprint);
     }
 
     // Call this AFTER a Morse login attempt completed
-    public void OnMorseResult(bool success)
+    public void OnMorseResult(bool success, string errorType = "")
     {
         if (!experimentEnabled || !sessionActive) return;
 
         IncAttempts(AuthMethod.Morse);
-        Debug.Log($"[TrialManager] Morse attempt #{morseAttempts} for '{currentUser}', success={success}");
+        int attemptIndex = morseAttempts;
+        bool isPractice = (attemptIndex == 1);
+
+        float duration = 0f;
+        if (morseTrialStartTime > 0f)
+            duration = Time.time - morseTrialStartTime;
+
+        int errorFlag = success ? 0 : 1;
+
+        // we normally don’t have device ID for Morse; you can reuse FP id or leave blank
+        string deviceUserId = authUI != null ? authUI.LastDeviceUserId : "";
+
+        CSVLogger.Instance?.LogTrial(
+            currentUser,
+            "morse",
+            attemptIndex,
+            isPractice,
+            success,
+            duration,
+            errorFlag,
+            deviceUserId,
+            errorType   // "timeout" or "mismatch" or ""
+        );
 
         OnAnyTrialFinished(AuthMethod.Morse);
     }
@@ -235,20 +287,27 @@ public class TrialManager : MonoBehaviour
         Debug.Log($"[TrialManager] Starting {currentMethod} trial #{nextIndex} " +
                   $"(practice={isPractice}) for '{currentUser}'");
 
-        // 🔹 Show "Practice" popup BEFORE the method panel opens
+        //Show "Practice" popup BEFORE the method panel opens
         if (isPractice)
         {
             ShowPopup($"{currentMethod} Practice", 1.5f);   // e.g. "Fingerprint Practice"
             yield return new WaitForSeconds(1.5f);
         }
 
+        //Mark trial start time *now*, right before the user actually does FP/MC
+        if (currentMethod == AuthMethod.Fingerprint)
+            fingerprintTrialStartTime = Time.time;
+        else
+            morseTrialStartTime = Time.time;
+
+        //Now start the actual method (your existing logic)
         if (currentMethod == AuthMethod.Fingerprint)
         {
-            authUI.OnChooseFingerprint();   // your existing logic
+            authUI.OnChooseFingerprint();   
         }
         else
         {
-            authUI.OnChooseMorse();         // your existing logic
+            authUI.OnChooseMorse();         
         }
     }
 
