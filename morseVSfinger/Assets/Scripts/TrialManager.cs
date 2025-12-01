@@ -39,6 +39,10 @@ public class TrialManager : MonoBehaviour
     public float fingerprintResultDelay = 2.0f;  // time to show 'verified / wrong finger'
     public float morseResultDelay = 1.0f;        // time to breathe after Morse
 
+    [Header("Morse Feedback Panels")]
+    [SerializeField] GameObject morseMatchPanel;    // green "Pattern Matched!"
+    [SerializeField] GameObject morseMismatchPanel; // red "Pattern Mismatched!"
+
     // Track practice completion
     bool fingerprintPracticeFinished = false;
     bool morsePracticeFinished = false;
@@ -81,9 +85,13 @@ public class TrialManager : MonoBehaviour
         // AuthUIController will still show the AuthMethod panel as usual.
     }
 
+    const int AttemptsPerMethod = 4;
+
     bool SessionDone()
     {
-        return fingerprintAttempts >= 4 && morseAttempts >= 4;
+        // session is done when *both* methods reached 4 attempts
+        return fingerprintAttempts >= AttemptsPerMethod &&
+               morseAttempts >= AttemptsPerMethod;
     }
 
     int GetAttempts(AuthMethod m)
@@ -130,7 +138,7 @@ public class TrialManager : MonoBehaviour
 
         // 🔹 if we didn’t pass any errorType, deduce from success
         if (string.IsNullOrEmpty(errorType))
-            errorType = success ? "" : "mismatch";    // fingerprint has its own messages though
+            errorType = success ? "none" : "mismatch";    // fingerprint has its own messages though
 
         CSVLogger.Instance?.LogTrial(
             currentUser,
@@ -162,8 +170,11 @@ public class TrialManager : MonoBehaviour
 
         int errorFlag = success ? 0 : 1;
 
-        // we normally don’t have device ID for Morse; you can reuse FP id or leave blank
         string deviceUserId = authUI != null ? authUI.LastDeviceUserId : "";
+
+        // 🔹 NEW: fill in default if caller didn’t specify one
+        if (string.IsNullOrEmpty(errorType))
+            errorType = success ? "none" : "mismatch";
 
         CSVLogger.Instance?.LogTrial(
             currentUser,
@@ -174,11 +185,21 @@ public class TrialManager : MonoBehaviour
             duration,
             errorFlag,
             deviceUserId,
-            errorType   // "timeout" or "mismatch" or ""
+            errorType
         );
 
         OnAnyTrialFinished(AuthMethod.Morse);
     }
+
+    IEnumerator MorseResultThenNext(float delay)
+    {
+        // Wait while the "Pattern Matched / Mismatched" panel is visible
+        yield return new WaitForSeconds(delay);
+
+        // Now continue with the normal trial scheduling
+        OnAnyTrialFinished(AuthMethod.Morse);
+    }
+
 
     private IEnumerator SessionCompleteRoutine()
     {
@@ -195,41 +216,27 @@ public class TrialManager : MonoBehaviour
         }
     }
 
-
     void OnAnyTrialFinished(AuthMethod methodJustFinished)
     {
-        // attempts AFTER increment
-        int attemptsForThisMethod = GetAttempts(methodJustFinished);
+        Debug.Log(
+            $"[TrialManager] Trial finished: {methodJustFinished} | " +
+            $"FP={fingerprintAttempts}, MC={morseAttempts}"
+        );
 
-        // 🔹 mark practice finished for this method if this was its first attempt
-        if (attemptsForThisMethod == 1)
-        {
-            if (methodJustFinished == AuthMethod.Fingerprint)
-                fingerprintPracticeFinished = true;
-            else
-                morsePracticeFinished = true;
-
-            // Only when BOTH FP and MC have done their first attempt,
-            // and we haven't shown this before, show "Practice done".
-            if (fingerprintPracticeFinished && morsePracticeFinished && !practiceDonePopupShown)
-            {
-                practiceDonePopupShown = true;
-                ShowPopup("Practice done", 2f);
-            }
-        }
-
-        // 🔹 Check if all 8 attempts (4 FP + 4 MC) are done
+        //Check completion FIRST
         if (SessionDone())
         {
             sessionActive = false;
             Debug.Log($"[TrialManager] All 8 attempts finished for '{currentUser}'.");
-
             StartCoroutine(SessionCompleteRoutine());
             return;
         }
 
-        // Decide which method is next and start it after the usual delay
-        currentMethod = GetNextMethod();
+        // Not done yet → pick the other method and start after delay
+        currentMethod = (methodJustFinished == AuthMethod.Fingerprint)
+            ? AuthMethod.Morse
+            : AuthMethod.Fingerprint;
+
         StartCoroutine(StartNextAfterDelay(methodJustFinished));
     }
 
@@ -263,10 +270,6 @@ public class TrialManager : MonoBehaviour
         {
             // Show "verified"/"wrong finger" for a bit
             yield return new WaitForSeconds(fingerprintResultDelay);
-        }
-        else if (finishedMethod == AuthMethod.Morse)
-        {
-            yield return new WaitForSeconds(morseResultDelay);
         }
 
         StartNextTrial();
@@ -339,6 +342,26 @@ public class TrialManager : MonoBehaviour
 
         _popupCo = StartCoroutine(PopupRoutine(message, duration));
     }
+
+    void ShowMorseFeedback(bool success, float duration)
+    {
+        // safety: turn both off first
+        if (morseMatchPanel) morseMatchPanel.SetActive(false);
+        if (morseMismatchPanel) morseMismatchPanel.SetActive(false);
+
+        GameObject panelToShow = success ? morseMatchPanel : morseMismatchPanel;
+        if (panelToShow == null) return;
+
+        StartCoroutine(MorseFeedbackRoutine(panelToShow, duration));
+    }
+
+    IEnumerator MorseFeedbackRoutine(GameObject panel, float duration)
+    {
+        panel.SetActive(true);
+        yield return new WaitForSeconds(duration);
+        panel.SetActive(false);
+    }
+
 
     IEnumerator PopupRoutine(string message, float duration)
     {
